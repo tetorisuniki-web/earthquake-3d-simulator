@@ -355,11 +355,23 @@ function animate(now){
   const s=shake(elapsed);
   groundX=s.x;groundZ=s.z;
   // Approximate horizontal ground acceleration.
-  const next=shake(elapsed+dt);
-  const ax=(next.x-s.x)/Math.max(dt,.001);
-  const az=(next.z-s.z)/Math.max(dt,.001);
-  for(const o of movable){
-   o.body.applyForce(new CANNON.Vec3(-ax*o.body.mass*8,0,-az*o.body.mass*8),o.body.position);
+const prev=shake(Math.max(0,elapsed-dt));
+const next=shake(elapsed+dt);
+
+// 揺れの変位から加速度を近似
+const ax=(next.x-2*s.x+prev.x)/(dt*dt);
+const az=(next.z-2*s.z+prev.z)/(dt*dt);
+
+for(const o of movable){
+  o.body.applyForce(
+    new CANNON.Vec3(
+      -ax*o.body.mass,
+      0,
+      -az*o.body.mass
+    ),
+    o.body.position
+  );
+}(new CANNON.Vec3(-ax*o.body.mass*8,0,-az*o.body.mass*8),o.body.position);
   }
   world.step(1/60,dt,3);
   if(elapsed>=Number(duration.value)){
