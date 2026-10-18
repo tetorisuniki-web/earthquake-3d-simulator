@@ -1,0 +1,245 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>3D地震被害シミュレーター</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101722;color:#fff;font-family:system-ui,sans-serif}
+header{padding:14px;font-size:19px;font-weight:bold}
+#view{height:48vh;min-height:260px;position:relative}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+.panel{padding:14px;display:grid;gap:13px}
+.card{background:#202c3b;border-radius:13px;padding:13px}
+label{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px}
+input,select,button{font:inherit}
+input[type=range]{width:100%;accent-color:#52b9ff}
+select{background:#111c29;color:white;padding:9px;border-radius:8px;width:100%}
+.buttons{display:flex;gap:8px}
+button{flex:1;padding:12px 5px;border:0;border-radius:9px;background:#1687dc;color:white;font-weight:bold}
+button.secondary{background:#435266}
+small{color:#b6c5d6;line-height:1.6}
+#status{color:#80d8ff}
+</style>
+</head>
+<body>
+<header>🌏 3D 地震被害シミュレーター</header>
+<div id="view"></div>
+<div class="panel">
+ <div class="card">
+  <label>地震設定モード</label>
+  <select id="mode">
+   <option value="intensity">震度指定モード</option>
+   <option value="wave">波形・周期指定モード</option>
+  </select>
+  <div id="intensityBox">
+   <label>設定震度 <b id="iv">6強</b></label>
+   <input id="intensity" type="range" min="1" max="7" step="1" value="6">
+  </div>
+  <div id="waveBox" hidden>
+   <label>最大加速度 <b id="av">400 gal</b></label>
+   <input id="accel" type="range" min="50" max="1000" step="10" value="400">
+   <label>周期 <b id="pv">0.8 秒</b></label>
+   <input id="period" type="range" min="0.2" max="3" step="0.1" value="0.8">
+  </div>
+  <label>揺れの継続時間 <b id="dv">20 秒</b></label>
+  <input id="duration" type="range" min="5" max="60" step="5" value="20">
+ </div>
+ <div class="card">
+  <div class="buttons">
+   <button id="start">▶ 地震発生</button>
+   <button id="pause" class="secondary">Ⅱ 一時停止</button>
+   <button id="reset" class="secondary">↻ リセット</button>
+  </div>
+  <p id="status">待機中</p>
+  <small>画面をドラッグして視点を変更できます。家具や小物の挙動は簡易物理モデルによる演出です。</small>
+ </div>
+ <div class="card">
+  <b>シミュレーション結果</b>
+  <p id="result">地震を発生させてください。</p>
+ </div>
+</div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import {OrbitControls} from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js';
+import * as CANNON from 'https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js';
+
+const host=document.querySelector('#view');
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x101722);
+scene.fog=new THREE.Fog(0x101722,15,32);
+const camera=new THREE.PerspectiveCamera(45,1,0.1,100);
+camera.position.set(8,6,9);
+const renderer=new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.shadowMap.enabled=false;
+host.appendChild(renderer.domElement);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.target.set(0,1,0);
+controls.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xddeeff,0x555566,2));
+const light=new THREE.DirectionalLight(0xffffff,2);
+light.position.set(5,10,6);scene.add(light);
+
+function mat(color,roughness=0.8){
+ return new THREE.MeshStandardMaterial({color,roughness});
+}
+const floorMat=mat(0x66717e),wallMat=mat(0xb6c3d0);
+const floor=new THREE.Mesh(new THREE.BoxGeometry(8,.2,8),floorMat);
+floor.position.y=-.1;scene.add(floor);
+function box(parent,x,y,z,w,h,d,material){
+ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+ m.position.set(x,y,z);parent.add(m);return m;
+}
+// Walls
+box(scene,0,2,-4,8,4,.12,wallMat);
+box(scene,-4,2,0,.12,4,8,wallMat);
+// Window
+box(scene,-1,2.5,-3.92,2,1.3,.04,mat(0x65c9ee));
+// Rug
+box(scene,0,.015,0,3,.025,2,mat(0x3e7180));
+
+// Physics world
+const world=new CANNON.World({gravity:new CANNON.Vec3(0,-9.82,0)});
+world.broadphase=new CANNON.SAPBroadphase(world);
+world.allowSleep=true;
+const ground=new CANNON.Body({mass:0,shape:new CANNON.Box(new CANNON.Vec3(4,.1,4)),position:new CANNON.Vec3(0,-.1,0)});
+world.addBody(ground);
+const objects=[];
+const fixed=[];
+function addFurniture(x,y,z,w,h,d,color,name,mass=0){
+ const mesh=box(scene,x,y,z,w,h,d,mat(color));
+ const body=new CANNON.Body({
+  mass,shape:new CANNON.Box(new CANNON.Vec3(w/2,h/2,d/2)),
+  position:new CANNON.Vec3(x,y,z),linearDamping:.15,angularDamping:.3,
+  material:new CANNON.Material({friction:.6})
+ });
+ world.addBody(body);
+ const item={mesh,body,home:new CANNON.Vec3(x,y,z),q:new CANNON.Quaternion(),name,mass};
+ body.quaternion.copy(item.q);
+ objects.push(item);
+ return item;
+}
+// Furniture and tabletop
+addFurniture(-1.3,.65,-1.5,1.5,.12,.8,0x9c6339,'テーブル',0);
+addFurniture(-1.3,.32,-1.5,.12,.55,.12,0x80502e,'テーブル脚',0);
+addFurniture(-1.95,.32,-1.5,.12,.55,.12,0x80502e,'テーブル脚',0);
+addFurniture(-.65,.32,-1.5,.12,.55,.12,0x80502e,'テーブル脚',0);
+addFurniture(-1.3,.32,-.85,.12,.55,.12,0x80502e,'テーブル脚',0);
+addFurniture(2,1,-2.8,.8,2,.5,0x8e6246,'本棚',12);
+addFurniture(2,.6,.5,.7,1.2,.7,0x526b89,'テレビ台',8);
+addFurniture(2,1.5,.5,.8,.5,.12,0x222831,'テレビ',1.2);
+addFurniture(-.4,.45,1.7,.65,.9,.65,0x5b9779,'椅子',4);
+const smallItems=[];
+for(let i=0;i<5;i++){
+ const x=-1.8+i*.24;
+ smallItems.push(addFurniture(x,.85,-1.5,.14,.22,.14,
+  [0xe5bd59,0xd76e65,0x76b9e8][i%3],'テーブル上の小物',.25));
+}
+const movable=objects.filter(o=>o.mass>0);
+const intensity=document.querySelector('#intensity');
+const accel=document.querySelector('#accel');
+const period=document.querySelector('#period');
+const duration=document.querySelector('#duration');
+const mode=document.querySelector('#mode');
+const labels=['','1','2','3','4','5弱','5強','6弱','6強','7'];
+function settings(){
+ document.querySelector('#iv').textContent=({'1':'1','2':'2','3':'3','4':'4','5':'5弱','6':'5強','7':'6弱'})[intensity.value]||'5強';
+ // The slider is a simple illustrative scale; actual JMA intensity
+ // cannot be inferred from a single acceleration value.
+ document.querySelector('#iv').textContent=['','1','2','3','4','5弱','5強','6弱'][intensity.value];
+ document.querySelector('#av').textContent=accel.value+' gal';
+ document.querySelector('#pv').textContent=Number(period.value).toFixed(1)+' 秒';
+ document.querySelector('#dv').textContent=duration.value+' 秒';
+ document.querySelector('#intensityBox').hidden=mode.value!=='intensity';
+ document.querySelector('#waveBox').hidden=mode.value!=='wave';
+}
+[intensity,accel,period,duration,mode].forEach(e=>e.addEventListener('input',settings));
+settings();
+let running=false,elapsed=0,simTime=0,damage=0,previous=performance.now();
+let groundX=0,groundZ=0;
+function shake(t){
+ const dur=Number(duration.value);
+ if(t>dur)return {x:0,z:0};
+ let a,p;
+ if(mode.value==='wave'){
+  a=Number(accel.value)/980;
+  p=Number(period.value);
+ }else{
+  // Illustrative motion levels, NOT a conversion from JMA intensity.
+  a=[0,.015,.025,.04,.07,.12,.19,.27][Number(intensity.value)];
+  p=.65;
+ }
+ const envelope=Math.min(1,t*2,(dur-t)*1.5);
+ const fade=Math.max(0,envelope);
+ return {
+  x:a*fade*(Math.sin(2*Math.PI*t/p)+.4*Math.sin(2*Math.PI*t/(p*1.7))),
+  z:a*.7*fade*(Math.sin(2*Math.PI*t/(p*1.3)))
+ };
+}
+function start(){
+ for(const o of movable){o.body.wakeUp();}
+ elapsed=0;running=true;
+ document.querySelector('#status').textContent='揺れています…';
+ document.querySelector('#result').textContent='被害状況を計算中…';
+}
+document.querySelector('#start').onclick=start;
+document.querySelector('#pause').onclick=()=>{
+ running=!running;
+ document.querySelector('#status').textContent=running?'揺れています…':'一時停止中';
+};
+function reset(){
+ running=false;elapsed=0;simTime=0;damage=0;
+ for(const o of objects){
+  o.body.position.copy(o.home);o.body.quaternion.copy(o.q);
+  o.body.velocity.setZero();o.body.angularVelocity.setZero();
+  o.body.force.setZero();o.body.torque.setZero();o.body.wakeUp();
+ }
+ document.querySelector('#status').textContent='待機中';
+ document.querySelector('#result').textContent='地震を発生させてください。';
+}
+document.querySelector('#reset').onclick=reset;
+
+function resize(){
+ const w=host.clientWidth,h=host.clientHeight;
+ camera.aspect=w/h;camera.updateProjectionMatrix();
+ renderer.setSize(w,h,false);
+}
+new ResizeObserver(resize).observe(host);resize();
+
+function animate(now){
+ requestAnimationFrame(animate);
+ const dt=Math.min((now-previous)/1000,.033);previous=now;
+ if(running){
+  elapsed+=dt;simTime+=dt;
+  const s=shake(elapsed);
+  groundX=s.x;groundZ=s.z;
+  // Approximate horizontal ground acceleration.
+  const next=shake(elapsed+dt);
+  const ax=(next.x-s.x)/Math.max(dt,.001);
+  const az=(next.z-s.z)/Math.max(dt,.001);
+  for(const o of movable){
+   o.body.applyForce(new CANNON.Vec3(-ax*o.body.mass*8,0,-az*o.body.mass*8),o.body.position);
+  }
+  world.step(1/60,dt,3);
+  if(elapsed>=Number(duration.value)){
+   running=false;
+   document.querySelector('#status').textContent='揺れ終了';
+   const tipped=movable.filter(o=>o.body.position.y<o.home.y-.3||o.body.quaternion.vmult(new CANNON.Vec3(0,1,0)).y<.65).length;
+   document.querySelector('#result').textContent=`移動・転倒した家具など：${tipped} / ${movable.length}（簡易判定）`;
+  }
+ }
+ // Translate the room visually to represent ground movement.
+ floor.position.x=groundX;floor.position.z=groundZ;
+ for(const o of objects){
+  o.mesh.position.set(o.body.position.x+groundX,o.body.position.y,o.body.position.z+groundZ);
+  o.mesh.quaternion.set(o.body.quaternion.x,o.body.quaternion.y,o.body.quaternion.z,o.body.quaternion.w);
+ }
+ controls.update();renderer.render(scene,camera);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
