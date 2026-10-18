@@ -371,8 +371,8 @@ for(const o of movable){
     ),
     o.body.position
   );
-}(new CANNON.Vec3(-ax*o.body.mass*8,0,-az*o.body.mass*8),o.body.position);
-  }
+}
+ 
   world.step(1/60,dt,3);
   if(elapsed>=Number(duration.value)){
    running=false;
