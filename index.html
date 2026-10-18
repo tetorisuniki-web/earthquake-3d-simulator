@@ -86,7 +86,48 @@ light.position.set(5,10,6);scene.add(light);
 function mat(color,roughness=0.8){
  return new THREE.MeshStandardMaterial({color,roughness});
 }
-const floorMat=mat(0x66717e),wallMat=mat(0xb6c3d0);
+function makeWoodTexture(){
+ const c=document.createElement('canvas');
+ c.width=512;
+ c.height=512;
+ const ctx=c.getContext('2d');
+ ctx.fillStyle='#9b704b';
+ ctx.fillRect(0,0,512,512);
+
+ for(let row=0;row<8;row++){
+  const y=row*64;
+  ctx.fillStyle=row%2?'#b18459':'#a5784f';
+  ctx.fillRect(0,y,512,62);
+
+  for(let x=0;x<512;x+=4){
+   const wave=Math.sin(x*.035+row*2)*2;
+   ctx.strokeStyle=`rgba(65,35,18,${0.06+Math.random()*.12})`;
+   ctx.lineWidth=1+Math.random()*2;
+   ctx.beginPath();
+   ctx.moveTo(x,y+12+wave);
+   ctx.lineTo(x+4,y+12+wave);
+   ctx.stroke();
+  }
+
+  ctx.strokeStyle='rgba(55,30,15,.35)';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(0,y+63);
+  ctx.lineTo(512,y+63);
+  ctx.stroke();
+ }
+ const texture=new THREE.CanvasTexture(c);
+ texture.wrapS=THREE.RepeatWrapping;
+ texture.wrapT=THREE.RepeatWrapping;
+ texture.repeat.set(3,3);
+ texture.colorSpace=THREE.SRGBColorSpace;
+ return texture;
+}
+const floorMat=new THREE.MeshStandardMaterial({
+ map:makeWoodTexture(),
+ roughness:.85
+});
+const wallMat=mat(0xd8d0c3);
 const floor=new THREE.Mesh(new THREE.BoxGeometry(8,.2,8),floorMat);
 floor.position.y=-.1;scene.add(floor);
 function box(parent,x,y,z,w,h,d,material){
@@ -139,6 +180,50 @@ for(let i=0;i<5;i++){
   [0xe5bd59,0xd76e65,0x76b9e8][i%3],'テーブル上の小物',.25));
 }
 const movable=objects.filter(o=>o.mass>0);
+function addDetail(parent,x,y,z,w,h,d,color){
+ const mesh=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),
+  new THREE.MeshStandardMaterial({
+   color,
+   roughness:.8
+  })
+ );
+ mesh.position.set(x,y,z);
+ parent.add(mesh);
+ return mesh;
+}
+
+const shelf=objects.find(o=>o.name==='本棚');
+
+if(shelf){
+ // 棚板
+ for(const y of [-.35,.1,.55]){
+  addDetail(shelf.mesh,0,y,.255,.74,.045,.045,0x68432d);
+ }
+
+ // 本：棚板の前面に並べる
+ const bookColors=[
+  0x8e4540,0x365d78,0xc69b54,
+  0x58765a,0x62547d,0xd0c4a5
+ ];
+
+ for(let row=0;row<3;row++){
+  let x=-.29;
+  for(let i=0;i<5;i++){
+   const w=.075+(i%2)*.018;
+   const h=.22+(i%3)*.035;
+   addDetail(
+    shelf.mesh,
+    x+w/2,
+    -.55+row*.45+h/2,
+    .285,
+    w,h,.035,
+    bookColors[(i+row)%bookColors.length]
+   );
+   x+=w+.025;
+  }
+ }
+}
 const intensity=document.querySelector('#intensity');
 const accel=document.querySelector('#accel');
 const period=document.querySelector('#period');
